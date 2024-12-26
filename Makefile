@@ -1,2 +1,2 @@
-lc3: main.c
+lc3:
 	cc main.c -o lc3-vm
