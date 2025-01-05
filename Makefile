@@ -1,2 +1,2 @@
 lc3:
-	cc main.c -o lc3-vm
+	cc main.c utils.c -o lc3-vm
