@@ -82,7 +82,76 @@ int main(int argc, const char* argv[]) {
         update_cond_flags(dr);
         break;
       }
-      // etc
+      case OP_JMP: {
+        uint16_t dest = (instr >> 6) & 0x7;
+        reg[R_PC] = dest;
+
+        break;
+      }
+      case OP_JSR: {
+        reg[R_R7] = reg[R_PC];
+        uint16_t cond = (instr >> 11) & 0x1;
+
+        if (cond) {
+          reg[R_PC] += sign_extend((instr & 0x7FF), 11)
+        } else {
+          reg[R_PC] = (instr >> 6) & 0x7;
+        }
+
+        break;
+      }
+      case OP_LD: {
+        uint16_t dr = (instr >> 9) & 0x7;
+        uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+        reg[dr] = mem_read(pc + pc_offset);
+
+        update_cond_flags(dr);
+        break;
+      }
+      case OP_LDR: {
+        uint16_t dr = (instr >> 9) & 0x7;
+        uint16_t base_r = (instr >> 6) & 0x7;
+        uint16_t offset = sign_extend(instr & 0x3F, 6);
+
+        reg[dr] = mem_read(reg[base_r] + offset);
+
+        update_cond_flags(dr);
+        break;
+      }
+      case OP_LEA: {
+        uint16_t dr = (instr >> 9) & 0x7;
+        uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+
+        reg[dr] = reg[R_PC] + pc_offset;
+
+        update_cond_flags(dr);
+        break;
+      }
+      case OP_ST: {
+        uint16_t sr = (instr >> 9) & 0x7;
+        uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+
+        mem_write(reg[R_PC] + pc_offset, reg[sr]);
+
+        break;
+      }
+      case OP_STI: {
+        uint16_t sr = (instr >> 9) & 0x7;
+        uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+
+        mem_write(mem_read(reg[R_PC] + pc_offset), reg[sr]);
+
+        break;
+      }
+      case OP_STR: {
+        uint16_t sr = (instr >> 9) & 0x7;
+        uint16_t base_r = (instr >> 6) & 0x7;
+        uint16_t offset = sign_extend(instr & 0x3F, 6);
+
+        mem_write(reg[base_r] + offset, reg[sr]);
+
+        break;
+      }
       default:
         // BAD OPCode
         break;
