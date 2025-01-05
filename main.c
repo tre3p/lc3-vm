@@ -43,12 +43,37 @@ int main(int argc, const char* argv[]) {
         update_cond_flags(dr);
         break;
       }
-      case OP_AND:
+      case OP_AND: {
+        uint16_t dr = (instr >> 9) & 0x7;
+        uint16_t r0 = (instr >> 6) & 0x7;
+
+        if ((instr >> 5) & 0x1) {
+          reg[dr] = r0 & sign_extend(instr & 0x1F, 5);
+        } else {
+          reg[dr] = r0 & reg[instr & 0x7];
+        }
+
+        update_cond_flags(dr);
         break;
-      case OP_NOT:
+      }
+      case OP_NOT: {
+        uint16_t dr = (instr >> 9) & 0x7;
+        uint16_t sr = (instr >> 6) & 0x7;
+        reg[dr] = ~reg[sr];
+
+        update_cond_flags(dr);
         break;
-      case OP_BR:
+      }
+      case OP_BR: {
+        uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+        uint16_t cond_flags = (instr >> 9) & 0x7;
+
+        if (cond_flags & reg[R_COND]) {
+          reg[R_PC] += pc_offset;
+        }
+
         break;
+      }
       case OP_LDI: {
         uint16_t dr = (instr >> 9) & 0x7;
         uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
