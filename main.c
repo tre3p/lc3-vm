@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "registers.h"
 #include "opcodes.h"
+#include "trapcodes.h"
 #include "cond_flags.h"
 #include "utils.c"
 
@@ -150,6 +151,66 @@ int main(int argc, const char* argv[]) {
 
         mem_write(reg[base_r] + offset, reg[sr]);
 
+        break;
+      }
+      case OP_TRAP: {
+        reg[R_R7] = reg[R_PC]; // store current value of PC
+
+        switch (instr & 0xFF) {
+          case TRAP_GETC: {
+            reg[R_R0] = (uint16_t) getchar();
+
+            update_cond_flags(R_R0);
+            break;
+          }
+          case TRAP_OUT: {
+            putc((char) reg[R_R0], stdout);
+
+            fflush(stdout);
+            break;
+          }
+          case TRAP_PUTS: {
+            uint16_t* c = memory + reg[R_R0];
+            while (*c) {
+              putc((char)*c, stdout);
+              ++c;
+            }
+
+            fflush(stdout);
+            break;
+          }
+          case TRAP_IN: {
+            printf("Enter a character: ");
+            char c = getchar();
+            putc(c, stdout);
+            fflush(stdout);
+            reg[R_R0] = (uint16_t) c;
+
+            update_cond_flags(R_R0);
+            break;
+          }
+          case TRAP_PUTSP: {
+            uint16_t* c = memory + reg[R_R0];
+
+            while (*c) {
+              char c1 = (*c) & 0xFF;
+              char c2 = (*c) >> 8;
+              putc(char1, stdout);
+              if (c2) putc(char2, stdout);
+              ++c;
+            }
+
+            fflush(stdout);
+            break;
+          }
+          case TRAP_HALT: {
+            puts("HALT");
+            fflush(stdout);
+
+            running = 0;
+            break;
+          }
+        }
         break;
       }
       default:
