@@ -1,24 +1,50 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <sys/termios.h>
+#include <sys/mman.h>
 #include "registers.h"
+#include <signal.h>
+#include "mm_registers.h"
 #include "opcodes.h"
 #include "trapcodes.h"
 #include "cond_flags.h"
-#include "utils.c"
+#include "utils.h"
 
 #define MEMORY_MAX (1 << 16)
 #define DEFAULT_PC_POS 0x3000
 
-uint16_t mem[MEMORY_MAX]; // 128 KB
+uint16_t memory[MEMORY_MAX]; // 128 KB
 uint16_t reg[R_COUNT];
 
 void update_cond_flags(uint16_t);
+void mem_write(uint16_t, uint16_t);
+uint16_t mem_read(uint16_t);
+int read_image(const char*);
+
+/* OS specific functions start */
+uint16_t check_key();
+void restore_input_buffering();
+void disable_input_buffering();
+void handle_interrupt(int);
+/* OS specific functions end */
 
 int main(int argc, const char* argv[]) {
   if (argc < 2) {
-    printf("lc3 [image-file1] ...\n");
+    printf("Usage: lc3 [image-file1] ...\n");
     return 2;
   }
+  for (int j = 1; j < argc; ++j) {
+    if (!read_image(argv[j])) {
+      printf("failed to load image: %s\n", argv[j]);
+      exit(1);
+    }
+  }
+
+  signal(SIGINT, handle_interrupt);
+  disable_input_buffering();
 
   reg[R_COND] = FL_ZRO;
   reg[R_PC] = DEFAULT_PC_POS;
@@ -49,9 +75,9 @@ int main(int argc, const char* argv[]) {
         uint16_t r0 = (instr >> 6) & 0x7;
 
         if ((instr >> 5) & 0x1) {
-          reg[dr] = r0 & sign_extend(instr & 0x1F, 5);
+          reg[dr] = reg[r0] & sign_extend(instr & 0x1F, 5);
         } else {
-          reg[dr] = r0 & reg[instr & 0x7];
+          reg[dr] = reg[r0] & reg[instr & 0x7];
         }
 
         update_cond_flags(dr);
@@ -85,7 +111,7 @@ int main(int argc, const char* argv[]) {
       }
       case OP_JMP: {
         uint16_t dest = (instr >> 6) & 0x7;
-        reg[R_PC] = dest;
+        reg[R_PC] = reg[dest];
 
         break;
       }
@@ -94,9 +120,10 @@ int main(int argc, const char* argv[]) {
         uint16_t cond = (instr >> 11) & 0x1;
 
         if (cond) {
-          reg[R_PC] += sign_extend((instr & 0x7FF), 11)
+          reg[R_PC] += sign_extend((instr & 0x7FF), 11);
         } else {
-          reg[R_PC] = (instr >> 6) & 0x7;
+          uint16_t base_r = (instr >> 6) & 0x7;
+          reg[R_PC] = reg[base_r];
         }
 
         break;
@@ -104,7 +131,7 @@ int main(int argc, const char* argv[]) {
       case OP_LD: {
         uint16_t dr = (instr >> 9) & 0x7;
         uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
-        reg[dr] = mem_read(pc + pc_offset);
+        reg[dr] = mem_read(reg[R_PC] + pc_offset);
 
         update_cond_flags(dr);
         break;
@@ -195,8 +222,8 @@ int main(int argc, const char* argv[]) {
             while (*c) {
               char c1 = (*c) & 0xFF;
               char c2 = (*c) >> 8;
-              putc(char1, stdout);
-              if (c2) putc(char2, stdout);
+              putc(c1, stdout);
+              if (c2) putc(c2, stdout);
               ++c;
             }
 
@@ -213,12 +240,58 @@ int main(int argc, const char* argv[]) {
         }
         break;
       }
-      default:
-        // BAD OPCode
-        break;
+      case OP_RES:
+      case OP_RTI:
+      default: {
+        printf("bad op_code detected");
+        exit(1);
+      }
     }
   }
+
+  restore_input_buffering();
   return 0;
+}
+
+void read_image_file(FILE* f) {
+  uint16_t origin;
+  fread(&origin, sizeof(origin), 1, f);
+  origin = swap16(origin);
+
+  uint16_t max_read = MEMORY_MAX - origin;
+  uint16_t* p = memory + origin;
+  size_t read = fread(p, sizeof(uint16_t), max_read, f);
+
+  while (read-- > 0) {
+    *p = swap16(*p);
+    ++p;
+  }
+}
+
+int read_image(const char* image_path) {
+  FILE* file = fopen(image_path, "rb");
+  if (!file) { return 0; }
+  read_image_file(file);
+  fclose(file);
+  return 1;
+}
+
+void mem_write(uint16_t addr, uint16_t val) {
+  memory[addr] = val;
+}
+
+uint16_t mem_read(uint16_t addr) {
+  /* handle read from memory mapped register */
+  if (addr == MR_KBSR) {
+    if (check_key()) {
+      memory[MR_KBSR] = (1 << 15);
+      memory[MR_KBDR] = getchar();
+    } else {
+      memory[MR_KBSR] = 0;
+    }
+  }
+
+  return memory[addr];
 }
 
 /**
@@ -232,4 +305,34 @@ void update_cond_flags(uint16_t r_num) {
   } else {
     reg[R_COND] = FL_POS;
   }
+}
+
+struct termios original_tio;
+
+void disable_input_buffering() {
+  tcgetattr(STDIN_FILENO, &original_tio);
+  struct termios new_tio = original_tio;
+  new_tio.c_lflag &= ~ICANON & ~ECHO;
+  tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+}
+
+void restore_input_buffering() {
+  tcsetattr(STDIN_FILENO, TCSANOW, &original_tio);
+}
+
+uint16_t check_key() {
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(STDIN_FILENO, &readfds);
+
+  struct timeval timeout;
+  timeout.tv_sec = 0;
+  timeout.tv_usec = 0;
+  return select(1, &readfds, NULL, NULL, &timeout) != 0;
+}
+
+void handle_interrupt(int signal) {
+  restore_input_buffering();
+  printf("\n");
+  exit(-2);
 }
